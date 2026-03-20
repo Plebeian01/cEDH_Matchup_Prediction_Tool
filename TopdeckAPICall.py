@@ -1,19 +1,16 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Nov 13 16:35:22 2024
+# Program to automatically convert data from the TopDeck API into csv format and clean missing entries
 
-@author: freez
-"""
-
-#Program to automatically convert data from the TopDeck API into csv format and clean missing entries
-
+import os
 import requests
 import pandas as pd
 import time
 import json
-import re
+from dotenv import load_dotenv
 
-API_KEY = "472bc6b8-8b76-4b60-9d44-3db14ce71b3f"
+load_dotenv()
+API_KEY = os.getenv("TOPDECK_API_KEY")
+if not API_KEY:
+    raise EnvironmentError("TOPDECK_API_KEY not set. Copy .env.example to .env and add your key.")
 
 url = "https://topdeck.gg/api/v2/tournaments"
 headers = {

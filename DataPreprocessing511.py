@@ -1,20 +1,13 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Tue Mar 18 18:18:05 2025
-
-@author: freez
-"""
 import numpy as np
 import pandas as pd
 import pickle
 from sklearn.preprocessing import LabelEncoder
-import os
 
 ### PREPROCESSING ###
-# load Data
+# Load data
 df = pd.read_csv("511_tournament_data.csv")
 
-# filter out unknown commander entries
+# Filter out unknown commander entries
 df = df[
     (df["Player Commander"] != "Unknown") &
     (df["Opponent 1"] != "Unknown") &
@@ -22,7 +15,7 @@ df = df[
     (df["Opponent 3"] != "Unknown")
 ]
 
-# get commander frequency, then compute logarithmic cutoff
+# Get commander frequency, then compute logarithmic cutoff
 commander_counts = df["Player Commander"].value_counts()
 log_cutoff = np.log1p(commander_counts).mean() * 10
 print(f"Log-Based Cutoff: {int(log_cutoff)} entries")
@@ -35,60 +28,60 @@ df_filtered = df_filtered[df_filtered["Opponent 1"].isin(valid_commanders)]
 df_filtered = df_filtered[df_filtered["Opponent 2"].isin(valid_commanders)]
 df_filtered = df_filtered[df_filtered["Opponent 3"].isin(valid_commanders)]
 
-#Save Legacy Dataset (Testing Purposes Only)
-df_filtered.to_csv("processed_tournament_data_LEGACY.csv")
+# Save legacy dataset (testing purposes only)
+df_filtered.to_csv("processed_tournament_data_LEGACY.csv", index=False)
 
-# Create one row for each game 
+# Create one row per game using seat/winner perspective
+player_cmdr = df_filtered["Player Commander"].values
+opp1 = df_filtered["Opponent 1"].values
+opp2 = df_filtered["Opponent 2"].values
+opp3 = df_filtered["Opponent 3"].values
+winner = df_filtered["Winner"].values
+seat = df_filtered["Seat"].values
+
 tables = []
-for index, row in df_filtered.iterrows():
-    if row["Winner"] == 1:
-        if row["Seat"] == 1:
-            tables.append([row["Player Commander"], row["Opponent 1"], row["Opponent 2"], row["Opponent 3"], 0])
-        elif row["Seat"] == 2:
-            tables.append([row["Opponent 1"], row["Player Commander"], row["Opponent 2"], row["Opponent 3"], 1])
-        elif row["Seat"] == 3:
-            tables.append([row["Opponent 1"], row["Opponent 2"], row["Player Commander"], row["Opponent 3"], 2])
-        elif row["Seat"] == 4:
-            tables.append([row["Opponent 1"], row["Opponent 2"], row["Opponent 3"], row["Player Commander"], 3])
-    elif row["Winner"] == 2 and row["Seat"] == 1:
-        tables.append([row["Player Commander"], row["Opponent 1"], row["Opponent 2"], row["Opponent 3"], 4])
+for pc, o1, o2, o3, w, s in zip(player_cmdr, opp1, opp2, opp3, winner, seat):
+    if w == 1:
+        if s == 1:
+            tables.append([pc, o1, o2, o3, 0])
+        elif s == 2:
+            tables.append([o1, pc, o2, o3, 1])
+        elif s == 3:
+            tables.append([o1, o2, pc, o3, 2])
+        elif s == 4:
+            tables.append([o1, o2, o3, pc, 3])
+    elif w == 2 and s == 1:
+        tables.append([pc, o1, o2, o3, 4])
 
 labels = ["deck1", "deck2", "deck3", "deck4", "outcome"]
 df_singled_tables = pd.DataFrame(tables, columns=labels)
 
 
 ### Label ENCODING ###
-#Initialize Label Encoder and fit on all commanders
+# Initialize Label Encoder and fit on all commanders
 encoder = LabelEncoder()
-encoder.fit(valid_commanders) 
+encoder.fit(valid_commanders)
 
-#Ensure "Unknown" is always included in the encoder
-#if "Unknown" not in encoder.classes_:
-#    encoder.classes_ = np.append(encoder.classes_, "Unknown")
-    
-#print("Number of decks:", len(encoder.classes_))
-#print("Is 'Unknown' in encoder?", "Unknown" in encoder.classes_)
-
-#Debug: Print unseen commanders before transforming
+# Warn about any unseen commanders before transforming
 for col in ["deck1", "deck2", "deck3", "deck4"]:
     unseen = set(df_singled_tables[col].unique()) - set(encoder.classes_)
     if unseen:
         print(f"WARNING: Unseen commanders in {col} before transforming:", unseen)
 
-#Replace unseen commanders with "Unknown" before transforming
+# Replace unseen commanders with "Unknown" before transforming
 for col in ["deck1", "deck2", "deck3", "deck4"]:
     df_singled_tables[col] = df_singled_tables[col].apply(lambda x: x if x in encoder.classes_ else "Unknown")
 
-#Encode Commanders
+# Encode commanders
 for col in ["deck1", "deck2", "deck3", "deck4"]:
-    df_singled_tables[f"{col}"] = encoder.transform(df_singled_tables[col])
-    
-df_encoded = df_singled_tables[["deck1", "deck2", "deck3", "deck4", "outcome"]] 
+    df_singled_tables[col] = encoder.transform(df_singled_tables[col])
+
+df_encoded = df_singled_tables[["deck1", "deck2", "deck3", "deck4", "outcome"]]
 
 # Save the filtered dataset
 df_encoded.to_csv("processed_tournament_data.csv", index=False)
 print(f"Filtered dataset saved! Kept {len(df_filtered)} rows.")
 
-#Save encoder to pickle for use in matchup predictor
+# Save encoder to pickle for use in matchup predictor
 with open("deck_encoder.pkl", "wb") as f:
     pickle.dump(encoder, f)
