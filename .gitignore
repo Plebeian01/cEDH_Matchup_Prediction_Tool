@@ -3,3 +3,4 @@ __pycache__/
 *.pth
 *.pkl
 *.pyc
+511_tournament_data.csv

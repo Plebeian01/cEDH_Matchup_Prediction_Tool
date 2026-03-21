@@ -1,3 +1,5 @@
+import json
+import os
 import pandas as pd
 import numpy as np
 import torch
@@ -39,7 +41,7 @@ def build_matchup_stats(table_df):
                 elif b == w:
                     wins[b][a] += 1
 
-    matchup = defaultdict(lambda: defaultdict(float))
+    matchup = defaultdict(lambda: defaultdict(lambda: 0.25))
     for A in appearances:
         for B in appearances[A]:
             if appearances[A][B] > 0:
@@ -336,7 +338,8 @@ def train_seat_model(df_all, num_decks, device):
 ###########################################################
 def main():
     # 1) Load data and generate synergy features
-    df = pd.read_csv("processed_tournament_data.csv")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    df = pd.read_csv(os.path.join(script_dir, "processed_tournament_data.csv"))
     matchup_stats = build_matchup_stats(df)
     df = apply_matchup_features(df, matchup_stats)
 
@@ -354,8 +357,8 @@ def main():
     seat_model = train_seat_model(df_winloss, num_decks, device)
 
     # 5) Save models
-    torch.save(draw_model.state_dict(), "best_draw_model.pth")
-    torch.save(seat_model.state_dict(), "best_seat_model.pth")
+    torch.save(draw_model.state_dict(), os.path.join(script_dir, "best_draw_model.pth"))
+    torch.save(seat_model.state_dict(), os.path.join(script_dir, "best_seat_model.pth"))
 
     # 6) Evaluate on df_test
     draw_model.eval()
@@ -366,8 +369,9 @@ def main():
                             "matchup_23", "matchup_24", "matchup_34"]].values
     label_arr = df_test["outcome"].values
 
-    final_preds = []
-    final_labels = list(label_arr)
+    # First pass: collect raw scores for both models
+    raw_draw_probs = []
+    raw_seat_preds = []
 
     for i in range(len(df_test)):
         decks = torch.tensor([deck_arr[i]], dtype=torch.long, device=device)
@@ -375,18 +379,26 @@ def main():
 
         with torch.no_grad():
             draw_logits = draw_model(decks, synergy)
-            draw_probs = F.softmax(draw_logits, dim=1)
-            p_draw = draw_probs[0, 1].item()
-            draw_pred = 1 if p_draw > 0.575 else 0
+            raw_draw_probs.append(F.softmax(draw_logits, dim=1)[0, 1].item())
 
-        if draw_pred == 1:
-            final_preds.append(4)
-        else:
-            with torch.no_grad():
-                seat_logits = seat_model(decks, synergy)
-                seat_probs = F.softmax(seat_logits, dim=1)
-                seat_pred = seat_probs.argmax(dim=1).item()
-                final_preds.append(seat_pred)
+            seat_logits = seat_model(decks, synergy)
+            raw_seat_preds.append(F.softmax(seat_logits, dim=1).argmax(dim=1).item())
+
+    raw_draw_probs = np.array(raw_draw_probs)
+
+    # Calibrate threshold: find the p_draw cutoff where predicted draw rate == actual draw rate
+    actual_draw_rate = (label_arr == 4).mean()
+    draw_threshold = float(np.percentile(raw_draw_probs, (1 - actual_draw_rate) * 100))
+    print(f"Actual draw rate: {actual_draw_rate:.3f} → calibrated threshold: {draw_threshold:.4f}")
+
+    # Save threshold so predictor511.py uses the same cutoff
+    with open(os.path.join(script_dir, "draw_threshold.json"), "w") as f:
+        json.dump({"draw_threshold": draw_threshold}, f)
+
+    # Second pass: apply threshold
+    final_preds = [4 if p >= draw_threshold else s
+                   for p, s in zip(raw_draw_probs, raw_seat_preds)]
+    final_labels = list(label_arr)
 
     # 7) Print evaluation
     print("Two-step final classification report (0-3 seats, 4=draw):")

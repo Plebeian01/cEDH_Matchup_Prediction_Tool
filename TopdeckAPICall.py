@@ -64,16 +64,20 @@ def ParseCommanderNames(player_data):
 
 
 def GetTournamentIDs():
-    """Fetch a list of tournament IDs from the last 90 days."""
+    """Fetch a list of tournament IDs from the last 365 days."""
     data = {
-        "last": 90,
+        "last": 365,
         "game": "Magic: The Gathering",
         "format": "EDH",
         "participantMin": 16,
         "columns": [],  # Only the TID field is needed from this call
     }
 
-    response = requests.post(url, headers=headers, json=data)
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=30)
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching tournament IDs: {e}")
+        return []
 
     if response.status_code == 200:
         try:
@@ -101,7 +105,16 @@ def GetTournamentData(TID, retries=3):
     }
 
     for attempt in range(retries):
-        response = requests.post(url, headers=headers, json=data)
+        try:
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+        except requests.exceptions.Timeout:
+            print(f"Timeout on tournament {TID} (attempt {attempt + 1}/{retries}). Retrying...")
+            time.sleep(5)
+            continue
+        except requests.exceptions.RequestException as e:
+            print(f"Network error on tournament {TID}: {e}. Retrying...")
+            time.sleep(5)
+            continue
 
         if response.status_code == 200:
             try:
@@ -200,5 +213,6 @@ df_filtered = df_structured[
     (df_structured["Opponent 3"] != "Unknown")
 ]
 
-df_filtered.to_csv("511_tournament_data.csv", index=False)
-print("Successfully saved structured tournament data to 511_tournament_data.csv")
+output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "511_tournament_data.csv")
+df_filtered.to_csv(output_path, index=False)
+print(f"Successfully saved structured tournament data to {output_path}")

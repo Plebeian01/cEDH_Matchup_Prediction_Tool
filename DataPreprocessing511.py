@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pandas as pd
 import pickle
@@ -5,7 +7,9 @@ from sklearn.preprocessing import LabelEncoder
 
 ### PREPROCESSING ###
 # Load data
-df = pd.read_csv("511_tournament_data.csv")
+script_dir = os.path.dirname(os.path.abspath(__file__))
+df = pd.read_csv(os.path.join(script_dir, "511_tournament_data.csv"))
+print(f"Raw rows loaded:              {len(df)}")
 
 # Filter out unknown commander entries
 df = df[
@@ -14,22 +18,23 @@ df = df[
     (df["Opponent 2"] != "Unknown") &
     (df["Opponent 3"] != "Unknown")
 ]
+print(f"After Unknown filter:         {len(df)} ({len(df)/171000*100:.1f}% of raw)")
 
 # Get commander frequency, then compute logarithmic cutoff
 commander_counts = df["Player Commander"].value_counts()
 log_cutoff = np.log1p(commander_counts).mean() * 10
-print(f"Log-Based Cutoff: {int(log_cutoff)} entries")
+print(f"Unique commanders:            {len(commander_counts)}")
+print(f"Log-Based Cutoff:             {int(log_cutoff)} entries")
+valid_commanders = commander_counts[commander_counts >= log_cutoff].index
+print(f"Commanders passing cutoff:    {len(valid_commanders)} / {len(commander_counts)}")
 
 # Apply the cutoff
 min_appearance = log_cutoff
-valid_commanders = commander_counts[commander_counts >= min_appearance].index
 df_filtered = df[df["Player Commander"].isin(valid_commanders)]
 df_filtered = df_filtered[df_filtered["Opponent 1"].isin(valid_commanders)]
 df_filtered = df_filtered[df_filtered["Opponent 2"].isin(valid_commanders)]
 df_filtered = df_filtered[df_filtered["Opponent 3"].isin(valid_commanders)]
-
-# Save legacy dataset (testing purposes only)
-df_filtered.to_csv("processed_tournament_data_LEGACY.csv", index=False)
+print(f"After frequency cutoff:       {len(df_filtered)}")
 
 # Create one row per game using seat/winner perspective
 player_cmdr = df_filtered["Player Commander"].values
@@ -78,10 +83,12 @@ for col in ["deck1", "deck2", "deck3", "deck4"]:
 
 df_encoded = df_singled_tables[["deck1", "deck2", "deck3", "deck4", "outcome"]]
 
-# Save the filtered dataset
-df_encoded.to_csv("processed_tournament_data.csv", index=False)
-print(f"Filtered dataset saved! Kept {len(df_filtered)} rows.")
+# Save the encoded dataset
+output_path = os.path.join(script_dir, "processed_tournament_data.csv")
+df_encoded.to_csv(output_path, index=False)
+print(f"Filtered dataset saved! Kept {len(df_encoded)} rows ({len(df_filtered)} before table deduplication).")
 
 # Save encoder to pickle for use in matchup predictor
-with open("deck_encoder.pkl", "wb") as f:
+encoder_path = os.path.join(script_dir, "deck_encoder.pkl")
+with open(encoder_path, "wb") as f:
     pickle.dump(encoder, f)

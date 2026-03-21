@@ -1,3 +1,5 @@
+import json
+import os
 import pandas as pd
 import torch
 import torch.nn.functional as F
@@ -6,27 +8,36 @@ from ML2 import DrawModel, WinLossModel, build_matchup_stats, apply_matchup_feat
 
 # --- SETTINGS ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+threshold_path = os.path.join(script_dir, "draw_threshold.json")
+if os.path.exists(threshold_path):
+    with open(threshold_path) as f:
+        DRAW_THRESHOLD = json.load(f)["draw_threshold"]
+else:
+    DRAW_THRESHOLD = 0.5
+    print("Warning: draw_threshold.json not found, using default threshold of 0.5")
 
 # --- LOAD MODELS ---
-with open("deck_encoder.pkl", "rb") as f:
+with open(os.path.join(script_dir, "deck_encoder.pkl"), "rb") as f:
     encoder = pickle.load(f)
 
 NUM_DECKS = len(encoder.classes_)
 
 draw_model = DrawModel(num_decks=NUM_DECKS).to(DEVICE)
-draw_model.load_state_dict(torch.load("best_draw_model.pth", map_location=DEVICE, weights_only=True))
+draw_model.load_state_dict(torch.load(os.path.join(script_dir, "best_draw_model.pth"), map_location=DEVICE, weights_only=True))
 draw_model.eval()
 
 seat_model = WinLossModel(num_decks=NUM_DECKS).to(DEVICE)
-seat_model.load_state_dict(torch.load("best_seat_model.pth", map_location=DEVICE, weights_only=True))
+seat_model.load_state_dict(torch.load(os.path.join(script_dir, "best_seat_model.pth"), map_location=DEVICE, weights_only=True))
 seat_model.eval()
 
 # --- LOAD HISTORICAL DATA FOR SYNERGY ---
-df_history = pd.read_csv("processed_tournament_data.csv")
+df_history = pd.read_csv(os.path.join(script_dir, "processed_tournament_data.csv"))
 matchup_stats = build_matchup_stats(df_history)
 
 # --- LOAD AND PREPROCESS NEW TOURNAMENT DATA ---
-df_new = pd.read_csv("new_tournament_data.csv")
+df_new = pd.read_csv(os.path.join(script_dir, "new_tournament_data.csv"))
 
 # Rename columns if needed
 if "Commander 1" in df_new.columns:
@@ -57,18 +68,17 @@ for i in range(len(df_new)):
     decks = torch.tensor([deck_arr[i]], dtype=torch.long, device=DEVICE)
     synergy = torch.tensor([synergy_arr[i]], dtype=torch.float32, device=DEVICE)
 
-    # Step 1: Predict Draw Probability
     with torch.no_grad():
+        # Step 1: Predict Draw Probability
         draw_logits = draw_model(decks, synergy)
-        draw_probs = F.softmax(draw_logits, dim=1)
-        p_draw = draw_probs[0, 1].item()
+        p_draw = F.softmax(draw_logits, dim=1)[0, 1].item()
 
-    # Step 2: Predict Seat Probabilities
-    with torch.no_grad():
+        # Step 2: Predict Seat Probabilities
         seat_logits = seat_model(decks, synergy)
         seat_probs = F.softmax(seat_logits, dim=1).cpu().numpy()[0]
 
     final_output = {
+        "is_draw": p_draw >= DRAW_THRESHOLD,
         "p_draw": p_draw,
         "p_seat0": seat_probs[0],
         "p_seat1": seat_probs[1],
@@ -78,8 +88,10 @@ for i in range(len(df_new)):
 
     predictions.append(final_output)
 
+    draw_flag = "DRAW" if final_output["is_draw"] else ""
     print(f"Game {i}: Seat1={final_output['p_seat0']:.3f}, Seat2={final_output['p_seat1']:.3f}, "
-          f"Seat3={final_output['p_seat2']:.3f}, Seat4={final_output['p_seat3']:.3f}, Draw={final_output['p_draw']:.3f}")
+          f"Seat3={final_output['p_seat2']:.3f}, Seat4={final_output['p_seat3']:.3f}, "
+          f"Draw={final_output['p_draw']:.3f} {draw_flag}")
 
 # --- SAVE TO CSV ---
 df_new["p_seat1"] = [p["p_seat0"] for p in predictions]
@@ -87,6 +99,7 @@ df_new["p_seat2"] = [p["p_seat1"] for p in predictions]
 df_new["p_seat3"] = [p["p_seat2"] for p in predictions]
 df_new["p_seat4"] = [p["p_seat3"] for p in predictions]
 df_new["p_draw"]  = [p["p_draw"] for p in predictions]
+df_new["predicted_draw"] = [p["is_draw"] for p in predictions]
 
-df_new.to_csv("predicted_new_tournament.csv", index=False)
+df_new.to_csv(os.path.join(script_dir, "predicted_new_tournament.csv"), index=False)
 print("Predictions saved to predicted_new_tournament.csv")
